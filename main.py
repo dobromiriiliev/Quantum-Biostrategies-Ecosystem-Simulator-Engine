@@ -1,13 +1,12 @@
 import numpy as np
 import random
-from qiskit import Aer, QuantumCircuit, execute, transpile, assemble
-from qiskit.circuit import Parameter
+from qiskit import QuantumCircuit, Aer, execute
+from qiskit.circuit.library import ZFeatureMap, RealAmplitudes
 from qiskit_machine_learning.algorithms import NeuralNetworkClassifier
-from qiskit_machine_learning.neural_networks import TwoLayerQNN
+from qiskit_machine_learning.neural_networks import OpflowQNN
+from qiskit.opflow import PauliSumOp, StateFn, AerPauliExpectation, Gradient
 from qiskit.utils import QuantumInstance
 from sklearn.preprocessing import StandardScaler
-from qiskit.circuit.library import ZFeatureMap, RealAmplitudes
-
 
 random.seed(42)
 np.random.seed(42)
@@ -18,22 +17,14 @@ class Environment:
 
 class Individual:
     def __init__(self, traits):
-        self.traits = traits  # Traits can include things like aggression level, speed, energy efficiency
-        self.energy = 100
+        self.traits = traits
+        self.energy = 100  # Energy levels that can affect survival and reproduction
 
 class Species:
     def __init__(self, name, population_size, trait_ranges):
         self.name = name
         self.population = [Individual({trait: np.random.uniform(*range) for trait, range in trait_ranges.items()})
                            for _ in range(population_size)]
-
-    def interact(self, other):
-        interactions = []
-        for individual in self.population:
-            for other_individual in other.population:
-                result = simulate_interaction(individual, other_individual)
-                interactions.append((individual, other_individual, result))
-        return interactions
 
 def create_quantum_circuit(parameters):
     theta, phi = parameters
@@ -54,10 +45,18 @@ def simulate_interaction(individual1, individual2):
     result = job.result().get_counts()
     return result
 
-quantum_instance = QuantumInstance(Aer.get_backend('aer_simulator'))
 feature_map = ZFeatureMap(feature_dimension=2, reps=1)
 ansatz = RealAmplitudes(2, reps=1)
-qnn = TwoLayerQNN(2, feature_map, ansatz, quantum_instance=quantum_instance)
+quantum_instance = QuantumInstance(Aer.get_backend('aer_simulator'))
+
+# Define the observable
+observable = PauliSumOp.from_list([("ZZ", 1.0)])
+
+# Create the OpflowQNN
+qnn = OpflowQNN(operator=observable @ StateFn(ansatz, is_measurement=True).adjoint(),
+                input_params=feature_map.parameters,
+                weight_params=ansatz.parameters,
+                quantum_instance=quantum_instance)
 
 class AdvancedStrategyModel:
     def __init__(self):
@@ -82,21 +81,17 @@ model_b = AdvancedStrategyModel()
 
 # Running the simulation
 for _ in range(10):
-    interactions_a = species_a.interact(species_b)
-    for ind_a, ind_b, result in interactions_a:
-        X_train = np.array([[ind_a.traits['aggression'], ind_b.traits['speed']]])
-        y_train = np.array([1 if '11' in result else 0])
-        model_a.train(X_train, y_train)
+    for ind_a in species_a.population:
+        for ind_b in species_b.population:
+            outcome = simulate_interaction(ind_a, ind_b)
+            X_train = np.array([[ind_a.traits['aggression'], ind_b.traits['speed']]])
+            y_train = np.array([1 if '11' in outcome else 0])
+            model_a.train(X_train, y_train)
 
-    interactions_b = species_b.interact(species_a)
-    for ind_b, ind_a, result in interactions_b:
-        X_train = np.array([[ind_b.traits['aggression'], ind_a.traits['speed']]])
-        y_train = np.array([1 if '11' in result else 0])
-        model_b.train(X_train, y_train)
-
-# Print final traits
-for ind in species_a.population[:5]:
-    print(f"Carnivore traits: {ind.traits}")
-
-for ind in species_b.population[:5]:
-    print(f"Herbivore traits: {ind.traits}")
+# Correctly accessing and printing species traits
+print(f"{species_a.name} final traits:")
+for individual in species_a.population[:5]:
+    print(individual.traits)
+print(f"{species_b.name} final traits:")
+for individual in species_b.population[:5]:
+    print(individual.traits)
