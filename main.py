@@ -1,97 +1,147 @@
+import torch
+import torch.optim as optim
+import torch.nn as nn
 import numpy as np
-import random
-from qiskit import QuantumCircuit, Aer, execute
-from qiskit.circuit.library import ZFeatureMap, RealAmplitudes
-from qiskit_machine_learning.algorithms import NeuralNetworkClassifier
-from qiskit_machine_learning.neural_networks import OpflowQNN
-from qiskit.opflow import PauliSumOp, StateFn, AerPauliExpectation, Gradient
-from qiskit.utils import QuantumInstance
-from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+import pandas as pd
+import os
 
-random.seed(42)
-np.random.seed(42)
+# Quantum Gates Implementation
+class QuantumGate:
+    @staticmethod
+    def hadamard():
+        return torch.tensor([[1, 1], [1, -1]], dtype=torch.complex64) / np.sqrt(2)
+    
+    @staticmethod
+    def rx(theta):
+        return torch.tensor([
+            [torch.cos(theta / 2), -1j * torch.sin(theta / 2)], 
+            [-1j * torch.sin(theta / 2), torch.cos(theta / 2)]
+        ], dtype=torch.complex64)
+    
+    @staticmethod
+    def cnot():
+        return torch.tensor([
+            [1, 0, 0, 0],
+            [0, 1, 0, 0],
+            [0, 0, 0, 1],
+            [0, 0, 1, 0]
+        ], dtype=torch.complex64)
 
-class Environment:
-    def __init__(self, factors):
-        self.factors = factors  # Environmental factors like temperature, humidity
+# Quantum Ecological Model with Quantum Neural Network
+class QuantumEcologicalModel(nn.Module):
+    def __init__(self, n_species, n_strategies):
+        super().__init__()
+        self.n_species = n_species
+        self.n_strategies = n_strategies
+        self.theta = nn.Parameter(torch.randn(n_species, n_strategies))
+        
+        # Classical neural network to assist in strategy adaptation
+        self.classical_nn = nn.Sequential(
+            nn.Linear(2 ** n_species, 128),  # Input dimension corrected
+            nn.ReLU(),
+            nn.Linear(128, n_species)  # Output dimension changed to n_species
+        )
 
-class Individual:
-    def __init__(self, traits):
-        self.traits = traits
-        self.energy = 100  # Energy levels that can affect survival and reproduction
+    def forward(self, x):
+        bsz = x.shape[0]
+        state = torch.zeros((2 ** self.n_species,), dtype=torch.complex64)
+        state[0] = 1  # Start in |0> state
+        
+        # Apply Hadamard gate to each qubit
+        for i in range(self.n_species):
+            state = self.apply_gate(state, QuantumGate.hadamard(), i)
+        
+        # Apply RX gate to each qubit based on theta
+        for i in range(self.n_species):
+            for j in range(self.n_strategies):
+                theta_ij = self.theta[i, j]
+                state = self.apply_gate(state, QuantumGate.rx(theta_ij), i)
+        
+        # Apply entanglement (CNOT) between each pair of qubits
+        for i in range(self.n_species):
+            for j in range(i + 1, self.n_species):
+                state = self.apply_cnot(state, i, j)
+        
+        # Measurement simulation (calculate probabilities)
+        probs = torch.abs(state) ** 2
+        probs = probs.view(1, -1)  # Flatten the tensor
 
-class Species:
-    def __init__(self, name, population_size, trait_ranges):
-        self.name = name
-        self.population = [Individual({trait: np.random.uniform(*range) for trait, range in trait_ranges.items()})
-                           for _ in range(population_size)]
+        # Use classical NN to refine strategies
+        refined_strategies = self.classical_nn(probs)
+        return refined_strategies
 
-def create_quantum_circuit(parameters):
-    theta, phi = parameters
-    qc = QuantumCircuit(2)
-    qc.h(0)
-    qc.cx(0, 1)
-    qc.ry(theta, 0)
-    qc.rz(phi, 1)
-    qc.measure_all()
-    return qc
+    def apply_gate(self, state, gate, qubit):
+        full_gate = torch.eye(2 ** self.n_species, dtype=torch.complex64)
+        for i in range(2 ** self.n_species):
+            for j in range(2 ** self.n_species):
+                if (i >> qubit) % 2 == (j >> qubit) % 2:
+                    full_gate[i, j] = gate[(i >> qubit) % 2, (j >> qubit) % 2]
+        return torch.matmul(full_gate, state)
+    
+    def apply_cnot(self, state, control_qubit, target_qubit):
+        full_cnot = torch.eye(2 ** self.n_species, dtype=torch.complex64)
+        control_mask = 1 << control_qubit
+        target_mask = 1 << target_qubit
+        for i in range(2 ** self.n_species):
+            if i & control_mask:
+                j = i ^ target_mask
+                full_cnot[i, i] = 0
+                full_cnot[j, j] = 0
+                full_cnot[i, j] = 1
+                full_cnot[j, i] = 1
+        return torch.matmul(full_cnot, state)
 
-def simulate_interaction(individual1, individual2):
-    theta = np.pi / individual1.traits['aggression']
-    phi = np.pi / individual2.traits['speed']
-    qc = create_quantum_circuit([theta, phi])
-    backend = Aer.get_backend('aer_simulator')
-    job = execute(qc, backend, shots=1)
-    result = job.result().get_counts()
-    return result
+def main():
+    n_species = 4  # Reduced for simplicity in tensor size
+    n_strategies = 3
+    model = QuantumEcologicalModel(n_species, n_strategies)
+    
+    optimizer = optim.Adam(model.parameters(), lr=0.01)
+    
+    # Load population data
+    data_path = 'animal_populations.csv'
+    if not os.path.exists(data_path):
+        print(f"{data_path} not found.")
+        return
+    
+    population_data = pd.read_csv(data_path)
+    
+    # Ensure the data is properly formatted
+    if 'Year' not in population_data.columns or 'Species1' not in population_data.columns:
+        print("CSV file must contain 'Year' and 'Species1' columns.")
+        return
 
-feature_map = ZFeatureMap(feature_dimension=2, reps=1)
-ansatz = RealAmplitudes(2, reps=1)
-quantum_instance = QuantumInstance(Aer.get_backend('aer_simulator'))
+    # Simulation loop
+    losses = []
+    for epoch in range(100):
+        data = torch.randn((1, n_species))  # Adjusted shape for batch size
+        output = model(data)
+        
+        # Print shapes for debugging
+        print(f"Data shape: {data.shape}")
+        print(f"Output shape: {output.shape}")
+        
+        # Loss calculation and backward pass
+        optimizer.zero_grad()
+        target = torch.tensor(population_data.iloc[epoch % len(population_data)].drop('Year')).float().view(1, -1)
+        print(f"Target shape: {target.shape}")  # Print target shape for debugging
+        
+        loss = torch.mean((output - target)**2)
+        loss.backward()
+        optimizer.step()
+        
+        losses.append(loss.item())
+        if epoch % 10 == 0:
+            print(f'Epoch {epoch}, Loss: {loss.item()}')
 
-# Define the observable
-observable = PauliSumOp.from_list([("ZZ", 1.0)])
+    # Analysis and comparison of results
+    plt.plot(population_data['Year'], population_data['Species1'], label='Actual Population')
+    plt.plot(np.arange(100), output.detach().numpy().flatten(), label='Simulated Population')
+    plt.xlabel('Year')
+    plt.ylabel('Population')
+    plt.legend()
+    plt.show()
 
-# Create the OpflowQNN
-qnn = OpflowQNN(operator=observable @ StateFn(ansatz, is_measurement=True).adjoint(),
-                input_params=feature_map.parameters,
-                weight_params=ansatz.parameters,
-                quantum_instance=quantum_instance)
-
-class AdvancedStrategyModel:
-    def __init__(self):
-        self.scaler = StandardScaler()
-        self.model = NeuralNetworkClassifier(neural_network=qnn)
-
-    def train(self, X_train, y_train):
-        X_scaled = self.scaler.fit_transform(X_train)
-        self.model.fit(X_scaled, y_train)
-
-    def predict(self, X):
-        X_scaled = self.scaler.transform(X)
-        return self.model.predict(X_scaled)
-
-# Simulation setup
-environment = Environment({'temperature': 70, 'humidity': 50})
-species_a = Species('Carnivore', 50, {'aggression': (5, 10), 'speed': (5, 10)})
-species_b = Species('Herbivore', 50, {'aggression': (1, 5), 'speed': (1, 5)})
-
-model_a = AdvancedStrategyModel()
-model_b = AdvancedStrategyModel()
-
-# Running the simulation
-for _ in range(10):
-    for ind_a in species_a.population:
-        for ind_b in species_b.population:
-            outcome = simulate_interaction(ind_a, ind_b)
-            X_train = np.array([[ind_a.traits['aggression'], ind_b.traits['speed']]])
-            y_train = np.array([1 if '11' in outcome else 0])
-            model_a.train(X_train, y_train)
-
-# Correctly accessing and printing species traits
-print(f"{species_a.name} final traits:")
-for individual in species_a.population[:5]:
-    print(individual.traits)
-print(f"{species_b.name} final traits:")
-for individual in species_b.population[:5]:
-    print(individual.traits)
+if __name__ == '__main__':
+    main()
