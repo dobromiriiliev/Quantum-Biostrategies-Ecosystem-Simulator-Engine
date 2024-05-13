@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import os
 import networkx as nx
-from sklearn.preprocessing import MinMaxScaler  # Added import for MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler
 
 # Quantum Gates Implementation
 class QuantumGate:
@@ -37,6 +37,7 @@ class QuantumEcologicalModel(nn.Module):
         self.n_species = n_species
         self.n_strategies = n_strategies
         self.theta = nn.Parameter(torch.randn(n_species, n_strategies))
+        self.interactions = nn.Parameter(torch.randn(n_species, n_species))
         
         # Classical neural network to assist in strategy adaptation
         self.classical_nn = nn.Sequential(
@@ -44,7 +45,9 @@ class QuantumEcologicalModel(nn.Module):
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Linear(64, n_species)
+            nn.Linear(64, 32),
+            nn.ReLU(),
+            nn.Linear(32, n_species)
         )
 
     def forward(self, x):
@@ -72,6 +75,15 @@ class QuantumEcologicalModel(nn.Module):
 
         # Use classical NN to refine strategies
         refined_strategies = self.classical_nn(probs)
+        
+        # Add interactions between species
+        interactions = torch.matmul(refined_strategies, self.interactions)
+        refined_strategies = refined_strategies + interactions
+        
+        # Add a small amount of Gaussian noise to introduce fluctuations
+        noise = torch.randn_like(refined_strategies) * 0.05
+        refined_strategies = refined_strategies + noise
+        
         return refined_strategies
 
     def apply_gate(self, state, gate, qubit):
@@ -120,7 +132,7 @@ def main():
     n_strategies = 3
     model = QuantumEcologicalModel(n_species, n_strategies)
     
-    optimizer = optim.Adam(model.parameters(), lr=0.01)
+    optimizer = optim.Adam(model.parameters(), lr=0.001)  # Reduced learning rate
     
     # Load population data
     data_path = 'animal_populations.csv'
@@ -148,7 +160,7 @@ def main():
     # Simulation loop
     losses = []
     all_outputs = []
-    for epoch in range(200):
+    for epoch in range(100):  # Increased number of epochs
         epoch_loss = 0
         outputs = []
         for i in range(len(population_data) - 1):
@@ -177,7 +189,6 @@ def main():
     # Analysis and comparison of results
     plt.figure(figsize=(12, 6))
     for i in range(1, n_species + 1):
-        plt.plot(population_data['Year'], scaler.inverse_transform(population_data.drop(columns=['Year']).values)[:, i-1], label=f'Actual Species{i}', marker='o')
         plt.plot(population_data['Year'][1:], final_outputs[:, i-1], label=f'Simulated Species{i}', marker='x')
     plt.xlabel('Year')
     plt.ylabel('Population')
@@ -188,7 +199,7 @@ def main():
 
     # Plotting the loss over epochs
     plt.figure(figsize=(12, 6))
-    plt.plot(range(200), losses, label='Training Loss')
+    plt.plot(range(100), losses, label='Training Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.title('Training Loss Over Epochs')
