@@ -5,6 +5,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import os
+import networkx as nx
+from sklearn.preprocessing import MinMaxScaler  # Added import for MinMaxScaler
 
 # Quantum Gates Implementation
 class QuantumGate:
@@ -38,13 +40,14 @@ class QuantumEcologicalModel(nn.Module):
         
         # Classical neural network to assist in strategy adaptation
         self.classical_nn = nn.Sequential(
-            nn.Linear(2 ** n_species, 128),  # Input dimension corrected
+            nn.Linear(2 ** n_species, 128),
             nn.ReLU(),
-            nn.Linear(128, n_species)  # Output dimension changed to n_species
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, n_species)
         )
 
     def forward(self, x):
-        bsz = x.shape[0]
         state = torch.zeros((2 ** self.n_species,), dtype=torch.complex64)
         state[0] = 1  # Start in |0> state
         
@@ -92,8 +95,28 @@ class QuantumEcologicalModel(nn.Module):
                 full_cnot[j, i] = 1
         return torch.matmul(full_cnot, state)
 
+def visualize_qubits(n_species):
+    G = nx.DiGraph()
+    nodes = range(2 ** n_species)
+    G.add_nodes_from(nodes)
+    
+    # Add edges with weights
+    for i in nodes:
+        for j in nodes:
+            if i != j:
+                weight = np.random.randint(1, 100)  # Random weight for demonstration
+                G.add_edge(i, j, weight=weight)
+    
+    pos = nx.spring_layout(G)
+    plt.figure(figsize=(12, 8))
+    nx.draw(G, pos, with_labels=True, node_size=700, node_color='lightgreen', font_size=8, font_weight="bold", arrowsize=20)
+    edge_labels = nx.get_edge_attributes(G, 'weight')
+    nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=8)
+    plt.title("Qubit Operations Visualization with Weighted Edges")
+    plt.show()
+
 def main():
-    n_species = 4  # Reduced for simplicity in tensor size
+    n_species = 4  # Number of species
     n_strategies = 3
     model = QuantumEcologicalModel(n_species, n_strategies)
     
@@ -108,40 +131,73 @@ def main():
     population_data = pd.read_csv(data_path)
     
     # Ensure the data is properly formatted
-    if 'Year' not in population_data.columns or 'Species1' not in population_data.columns:
-        print("CSV file must contain 'Year' and 'Species1' columns.")
+    required_columns = ['Year', 'Species1', 'Species2', 'Species3', 'Species4']
+    if not all(col in population_data.columns for col in required_columns):
+        print(f"CSV file must contain the following columns: {required_columns}")
         return
 
+    # Get the initial year and first 24 years of data
+    initial_year = population_data['Year'].iloc[0]
+    end_year = initial_year + 23
+    population_data = population_data[population_data['Year'] <= end_year].reset_index(drop=True)
+    
+    # Normalize data
+    scaler = MinMaxScaler()
+    population_data.iloc[:, 1:] = scaler.fit_transform(population_data.iloc[:, 1:].astype(float))
+    
     # Simulation loop
     losses = []
-    for epoch in range(100):
-        data = torch.randn((1, n_species))  # Adjusted shape for batch size
-        output = model(data)
+    all_outputs = []
+    for epoch in range(200):
+        epoch_loss = 0
+        outputs = []
+        for i in range(len(population_data) - 1):
+            data = torch.tensor(population_data.drop(columns=['Year']).iloc[i].values).float().view(1, -1)
+            target = torch.tensor(population_data.drop(columns=['Year']).iloc[i+1].values).float().view(1, -1)
+            
+            output = model(data)
+            
+            optimizer.zero_grad()
+            loss = torch.mean((output - target)**2)
+            loss.backward()
+            optimizer.step()
+            
+            epoch_loss += loss.item()
+            outputs.append(output.detach().numpy().flatten())
         
-        # Print shapes for debugging
-        print(f"Data shape: {data.shape}")
-        print(f"Output shape: {output.shape}")
-        
-        # Loss calculation and backward pass
-        optimizer.zero_grad()
-        target = torch.tensor(population_data.iloc[epoch % len(population_data)].drop('Year')).float().view(1, -1)
-        print(f"Target shape: {target.shape}")  # Print target shape for debugging
-        
-        loss = torch.mean((output - target)**2)
-        loss.backward()
-        optimizer.step()
-        
-        losses.append(loss.item())
+        losses.append(epoch_loss / len(population_data))
+        all_outputs.append(outputs)
         if epoch % 10 == 0:
-            print(f'Epoch {epoch}, Loss: {loss.item()}')
+            print(f'Epoch {epoch}, Loss: {epoch_loss / len(population_data)}')
+
+    # Convert all_outputs to numpy array for plotting
+    final_outputs = np.array(all_outputs[-1]).squeeze()
+    final_outputs = scaler.inverse_transform(final_outputs.reshape(-1, n_species))
 
     # Analysis and comparison of results
-    plt.plot(population_data['Year'], population_data['Species1'], label='Actual Population')
-    plt.plot(np.arange(100), output.detach().numpy().flatten(), label='Simulated Population')
+    plt.figure(figsize=(12, 6))
+    for i in range(1, n_species + 1):
+        plt.plot(population_data['Year'], scaler.inverse_transform(population_data.drop(columns=['Year']).values)[:, i-1], label=f'Actual Species{i}', marker='o')
+        plt.plot(population_data['Year'][1:], final_outputs[:, i-1], label=f'Simulated Species{i}', marker='x')
     plt.xlabel('Year')
     plt.ylabel('Population')
+    plt.title('Population Projection for 24 Years')
     plt.legend()
+    plt.grid(True)
     plt.show()
+
+    # Plotting the loss over epochs
+    plt.figure(figsize=(12, 6))
+    plt.plot(range(200), losses, label='Training Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Training Loss Over Epochs')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+    # Visualize the qubits
+    visualize_qubits(n_species)
 
 if __name__ == '__main__':
     main()
